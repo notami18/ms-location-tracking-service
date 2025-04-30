@@ -11,6 +11,7 @@ router.get('/latest/public', locationController.getPublicLocations);
 router.use(authMiddleware);
 router.get('/', locationController.getAllLocations);
 router.get('/latest', locationController.getLatestLocations);
+router.get('/latest/:deviceId', locationController.getLatestLocation);
 router.get('/device/:deviceId', locationController.getLocationsByDevice);
 router.get('/area', locationController.searchLocationsInArea);
 router.get('/route/:deviceId', locationController.getDeviceRoute);

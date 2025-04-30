@@ -9,6 +9,7 @@ const dashboardRoutes = require('./src/routes/dashboardRoutes');
 const errorHandler = require('./src/middleware/errorHandler');
 const logger = require('./src/utils/logger');
 
+const path = require('path');
 // Express app
 const app = express();
 
@@ -22,8 +23,18 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Middleware
-app.use(helmet()); // Seguridad
-app.use(cors()); // CORS
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+  })
+); // Seguridad
+app.use(
+  cors({
+    origin: '*', // O configura dominios específicos
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 app.use(compression()); // Compresión
 app.use(express.json()); // Parseo de JSON
 app.use(express.urlencoded({ extended: true }));
@@ -33,6 +44,8 @@ app.use((req, res, next) => {
   logger.info(`${req.method} ${req.url}`);
   next();
 });
+
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Rutas - Asegúrate de que son middlewares válidos de Express
 app.use('/api/locations', locationRoutes);
@@ -57,7 +70,18 @@ app.use((req, res, next) => {
   });
 });
 
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Middleware de manejo de errores
 app.use(errorHandler);
+
+// app.use(express.static('public'));
+
+// // Opcionalmente, añadir una ruta específica para la interfaz web
+// app.get('/dashboard', (req, res) => {
+//   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// });
 
 module.exports = app;

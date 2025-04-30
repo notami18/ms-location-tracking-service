@@ -154,24 +154,39 @@ exports.getDeviceRoute = async (req, res, next) => {
     const deviceId = req.params.deviceId;
     const queryParams = req.query;
 
-    let startDate = queryParams.startDate
-      ? new Date(queryParams.startDate)
-      : new Date();
-    let endDate = queryParams.endDate
-      ? new Date(queryParams.endDate)
-      : new Date();
+    // Manejar fechas
+    let startDate, endDate;
 
-    // Por defecto, últimas 24 horas si las fechas son inválidas
-    if (
-      startDate > endDate ||
-      isNaN(startDate.getTime()) ||
-      isNaN(endDate.getTime())
-    ) {
-      endDate = new Date();
+    if (queryParams.startDate) {
+      startDate = new Date(queryParams.startDate);
+    } else {
+      // Por defecto, 24 horas atrás
       startDate = new Date();
       startDate.setHours(startDate.getHours() - 24);
     }
 
+    if (queryParams.endDate) {
+      endDate = new Date(queryParams.endDate);
+    } else {
+      // Por defecto, ahora
+      endDate = new Date();
+    }
+
+    // Validar fechas
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Fechas inválidas. Usa formato ISO 8601 (YYYY-MM-DDTHH:MM:SS.sssZ)',
+      });
+    }
+
+    // Loguear la consulta para debugging
+    console.log(
+      `Buscando rutas para dispositivo ${deviceId} desde ${startDate.toISOString()} hasta ${endDate.toISOString()}`
+    );
+
+    // Ejecutar la consulta
     const locations = await collection
       .find({
         deviceId: deviceId,
@@ -183,13 +198,46 @@ exports.getDeviceRoute = async (req, res, next) => {
       .sort({ timestamp: 1 })
       .toArray();
 
+    console.log(`Se encontraron ${locations.length} puntos de ubicación`);
+
+    // Si no hay datos, devolver un arreglo vacío pero con mensaje informativo
+    if (locations.length === 0) {
+      return res.json({
+        success: true,
+        deviceId: deviceId,
+        startDate: startDate,
+        endDate: endDate,
+        pointCount: 0,
+        message:
+          'No se encontraron datos de ubicación para este dispositivo en el rango de fechas especificado',
+        route: [],
+      });
+    }
+
     // Formatear datos para visualización de ruta
-    const route = locations.map((loc) => ({
-      lat: loc.location.coordinates[1],
-      lng: loc.location.coordinates[0],
-      timestamp: loc.timestamp,
-      accuracy: loc.accuracy || 0,
-    }));
+    const route = locations
+      .map((loc) => {
+        // Verificar si la ubicación tiene el formato correcto
+        if (
+          !loc.location ||
+          !loc.location.coordinates ||
+          loc.location.coordinates.length < 2
+        ) {
+          console.warn(
+            `Ubicación con formato incorrecto: ${JSON.stringify(loc)}`
+          );
+          return null;
+        }
+
+        return {
+          lat: loc.location.coordinates[1], // Latitud es el segundo elemento en GeoJSON
+          lng: loc.location.coordinates[0], // Longitud es el primer elemento en GeoJSON
+          timestamp: loc.timestamp,
+          accuracy: loc.accuracy || 0,
+          city: loc.city || 'Desconocido', // Incluir ciudad si existe
+        };
+      })
+      .filter((point) => point !== null); // Eliminar puntos nulos
 
     res.json({
       success: true,
@@ -200,7 +248,7 @@ exports.getDeviceRoute = async (req, res, next) => {
       route: route,
     });
   } catch (error) {
-    logger.error('Error al obtener ruta del dispositivo:', error);
+    console.error('Error al obtener ruta del dispositivo:', error);
     next(error);
   }
 };
@@ -247,6 +295,56 @@ exports.getPublicLocations = async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error al obtener ubicaciones públicas:', error);
+    next(error);
+  }
+};
+
+// Obtener la última ubicación de un dispositivo
+exports.getLatestLocation = async (req, res, next) => {
+  try {
+    const db = await connectToDatabase();
+    const collection = db.collection('deviceLocations');
+    
+    const deviceId = req.params.deviceId;
+    
+    // Buscar la ubicación más reciente
+    const latestLocation = await collection.find({ deviceId })
+      .sort({ timestamp: -1 })
+      .limit(1)
+      .toArray();
+    
+    if (latestLocation.length === 0) {
+      return res.json({
+        success: true,
+        deviceId,
+        message: 'No se encontraron datos de ubicación para este dispositivo',
+        location: null
+      });
+    }
+    
+    const location = latestLocation[0];
+    
+    // Formatear respuesta
+    const formattedLocation = {
+      lat: location.location.coordinates[1],
+      lng: location.location.coordinates[0],
+      timestamp: location.timestamp,
+      accuracy: location.accuracy || 0,
+      city: location.city || 'Desconocido',
+      speed: location.speed || 0,
+      heading: location.heading || 0,
+      battery: location.battery || 0,
+      isMock: location.isMock || false
+    };
+    
+    res.json({
+      success: true,
+      deviceId,
+      updatedAt: new Date(),
+      location: formattedLocation
+    });
+  } catch (error) {
+    console.error('Error al obtener la última ubicación:', error);
     next(error);
   }
 };

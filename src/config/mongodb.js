@@ -1,5 +1,6 @@
 const { MongoClient } = require('mongodb');
 const logger = require('../utils/logger');
+require('dotenv').config();
 
 let cachedDb = null;
 let client = null;

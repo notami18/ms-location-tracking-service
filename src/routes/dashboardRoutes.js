@@ -1,12 +1,15 @@
 const express = require('express');
+const dashboardController = require('../controllers/dashboardController');
+// const authMiddleware = require('../middleware/auth');
+
 const router = express.Router();
-// Si aún no tienes un controlador, puedes crear uno básico
-const dashboardController = {
-  getStats: (req, res) => {
-    res.json({ message: 'Estadísticas del dashboard (pendiente de implementar)' });
-  }
-};
+
+// Aplicar middleware de autenticación si no estamos en modo desarrollo con SKIP_AUTH
+// if (!(process.env.NODE_ENV === 'development' && process.env.SKIP_AUTH === 'true')) {
+//   router.use(authMiddleware);
+// }
 
 router.get('/stats', dashboardController.getStats);
+router.get('/route-history', dashboardController.getRouteHistory);
 
-module.exports = router;  // Exporta el router
+module.exports = router;
