@@ -1,66 +1,114 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Visor de Ubicaciones</title>
-    
+
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
+
     <!-- Estilos personalizados -->
     <link rel="stylesheet" href="css/styles.css">
 </head>
+
 <body>
     <div class="container">
         <header>
             <h1>Sistema de Rastreo de Ubicaciones</h1>
+
+            <!-- Indicador de estado WebSocket -->
+            <div class="websocket-status">
+                <span id="wsStatus" class="status-badge disconnected">Desconectado</span>
+                <span id="reconnectingMsg" class="reconnecting-msg hidden">Reconectando...</span>
+            </div>
+
             <div class="controls">
                 <select id="deviceSelect">
                     <option value="">Seleccione dispositivo...</option>
                 </select>
-                
+
+                <!-- Botón para ver flota completa -->
+                <button id="viewFleetBtn" class="btn primary-btn">Ver Flota Completa</button>
+
                 <div class="date-range">
                     <label for="startDate">Desde:</label>
-                    <input type="datetime-local" id="startDate">
-                    
+                    <input type="date" id="startDate" name="startDate">
+
                     <label for="endDate">Hasta:</label>
-                    <input type="datetime-local" id="endDate">
-                    
-                    <button id="searchButton">Buscar</button>
+                    <input type="date" id="endDate" name="endDate">
                 </div>
             </div>
+
             <div class="tracking-controls">
                 <div class="switch-container">
-                  <label class="switch">
-                    <input type="checkbox" id="trackingSwitch">
-                    <span class="slider round"></span>
-                  </label>
-                  <span class="switch-label">Seguimiento en tiempo real</span>
+                    <label class="switch">
+                        <input type="checkbox" id="trackingSwitch">
+                        <span class="slider round"></span>
+                    </label>
+                    <span class="switch-label">Seguimiento en tiempo real</span>
                 </div>
-                
+
                 <div class="interval-controls">
-                  <label for="trackingInterval">Intervalo (segundos):</label>
-                  <input type="number" id="trackingInterval" min="1" max="60" value="5">
+                    <label for="trackingInterval">Intervalo (segundos):</label>
+                    <input type="number" id="trackingInterval" min="1" max="60" value="5">
                 </div>
-                
+
                 <div class="status-indicator" id="trackingStatus">
-                  Inactivo
+                    Inactivo
                 </div>
-              </div>
+            </div>
         </header>
-        
+
         <div class="content">
-            <div id="map"></div>
-            
+            <div id="map" style="width: 100%; height: 400px;"></div>
+
             <div class="sidebar">
-                <div class="stats-panel">
-                    <h3>Estadísticas</h3>
+                <!-- Panel para dispositivo individual -->
+                <div id="deviceStatsContainer" class="stats-panel">
+                    <h3>Estadísticas del Dispositivo</h3>
                     <div id="stats-content">
-                        <p>Cargando estadísticas...</p>
+                        <div class="stat">
+                            <span class="stat-label">Última actualización:</span>
+                            <span id="lastUpdateTime" class="stat-value">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Ciudad:</span>
+                            <span id="currentCity" class="stat-value">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Velocidad:</span>
+                            <span id="currentSpeed" class="stat-value">--</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Precisión:</span>
+                            <span id="accuracy" class="stat-value">--</span>
+                        </div>
                     </div>
                 </div>
-                
+
+                <!-- Panel para vista de flota -->
+                <div id="fleetStatsContainer" class="stats-panel hidden">
+                    <h3>Estadísticas de Flota</h3>
+                    <div class="stat">
+                        <span class="stat-label">Dispositivos activos:</span>
+                        <span id="activeDeviceCount" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">En movimiento:</span>
+                        <span id="movingDeviceCount" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Detenidos:</span>
+                        <span id="stoppedDeviceCount" class="stat-value">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Distribución por ciudad:</span>
+                        <div id="cityDistribution" class="city-distribution"></div>
+                    </div>
+                </div>
+
                 <div class="route-history">
                     <h3>Historial de Rutas</h3>
                     <div id="route-history-content">
@@ -70,13 +118,16 @@
             </div>
         </div>
     </div>
-    
+
     <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    
+
     <!-- Scripts personalizados -->
-    <script src="js/map.js"></script>
-    <script src="js/api.js"></script>
-    <script src="js/app.js"></script>
+    <!-- Cliente WebSocket primero para que esté disponible para los demás scripts -->
+    <script src="/js/api.js"></script>
+    <script src="/js/websocket-client.js"></script>
+    <script src="/js/map.js"></script>
+    <script src="/js/app.js"></script>
 </body>
+
 </html>

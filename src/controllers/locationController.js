@@ -304,26 +304,27 @@ exports.getLatestLocation = async (req, res, next) => {
   try {
     const db = await connectToDatabase();
     const collection = db.collection('deviceLocations');
-    
+
     const deviceId = req.params.deviceId;
-    
+
     // Buscar la ubicación más reciente
-    const latestLocation = await collection.find({ deviceId })
+    const latestLocation = await collection
+      .find({ deviceId })
       .sort({ timestamp: -1 })
       .limit(1)
       .toArray();
-    
+
     if (latestLocation.length === 0) {
       return res.json({
         success: true,
         deviceId,
         message: 'No se encontraron datos de ubicación para este dispositivo',
-        location: null
+        location: null,
       });
     }
-    
+
     const location = latestLocation[0];
-    
+
     // Formatear respuesta
     const formattedLocation = {
       lat: location.location.coordinates[1],
@@ -334,17 +335,70 @@ exports.getLatestLocation = async (req, res, next) => {
       speed: location.speed || 0,
       heading: location.heading || 0,
       battery: location.battery || 0,
-      isMock: location.isMock || false
+      isMock: location.isMock || false,
     };
-    
+
     res.json({
       success: true,
       deviceId,
       updatedAt: new Date(),
-      location: formattedLocation
+      location: formattedLocation,
     });
   } catch (error) {
     console.error('Error al obtener la última ubicación:', error);
+    next(error);
+  }
+};
+
+exports.getActiveDevices = async (req, res, next) => {
+  try {
+    const db = await connectToDatabase();
+    const deviceCollection = db.collection('devices');
+    const locationCollection = db.collection('deviceLocations');
+
+    // Definir "activo" como dispositivos con ubicación en las últimas 2 horas
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+
+    // Obtener los dispositivos activos
+    const activeDevices = await deviceCollection
+      .find({ lastSeen: { $gte: twoHoursAgo } })
+      .toArray();
+
+    // Para cada dispositivo, obtener su última ubicación
+    const devicesWithLocation = await Promise.all(
+      activeDevices.map(async (device) => {
+        const latestLocation = await locationCollection
+          .find({ deviceId: device.deviceId })
+          .sort({ timestamp: -1 })
+          .limit(1)
+          .toArray();
+
+        return {
+          deviceId: device.deviceId,
+          name: device.name || device.deviceId,
+          lastSeen: device.lastSeen,
+          location:
+            latestLocation.length > 0
+              ? {
+                  lat: latestLocation[0].location.coordinates[1],
+                  lng: latestLocation[0].location.coordinates[0],
+                  timestamp: latestLocation[0].timestamp,
+                  accuracy: latestLocation[0].accuracy || 0,
+                  city: latestLocation[0].city || 'Desconocido',
+                  isMock: latestLocation[0].isMock || false,
+                }
+              : null,
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      count: devicesWithLocation.length,
+      devices: devicesWithLocation,
+    });
+  } catch (error) {
+    console.error('Error al obtener dispositivos activos:', error);
     next(error);
   }
 };

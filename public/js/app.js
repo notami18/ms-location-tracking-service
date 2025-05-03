@@ -1,347 +1,343 @@
-// Elementos del DOM
-const deviceSelect = document.getElementById('deviceSelect');
-const startDateInput = document.getElementById('startDate');
-const endDateInput = document.getElementById('endDate');
-const searchButton = document.getElementById('searchButton');
-const statsContent = document.getElementById('stats-content');
-const routeHistoryContent = document.getElementById('route-history-content');
+// Variables globales
+let websocket;
+let trackingEnabled = false;
+// let trackingInterval = null;
+let trackingIntervalSeconds = 5;
+let currentDevice = null;
 
-const trackingSwitch = document.getElementById('trackingSwitch');
-const trackingInterval = document.getElementById('trackingInterval');
-const trackingStatus = document.getElementById('trackingStatus');
-
-// Inicializar la aplicación
-document.addEventListener('DOMContentLoaded', () => {
-  // Inicializar el mapa
-  initMap();
-
-  // Configurar fechas por defecto (último día)
-  const now = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(now.getDate() - 1);
-
-  // Formatear fechas para input datetime-local (YYYY-MM-DDThh:mm)
-  startDateInput.value = formatDateForInput(yesterday);
-  endDateInput.value = formatDateForInput(now);
+// Inicializar aplicación
+function initApp() {
+  console.log('Inicializando aplicación...');
 
   // Cargar dispositivos
   loadDevices();
 
-  // Cargar estadísticas
-  loadStats();
+  // Configurar controles de UI
+  setupUIControls();
 
-  // Event listeners
-  deviceSelect.addEventListener('change', onDeviceChange);
-  searchButton.addEventListener('click', onSearch);
+  // Inicializar selectores de fecha
+  setupDatePickers();
 
-  // Event listeners para el seguimiento en tiempo real
-  trackingSwitch.addEventListener('change', onTrackingSwitchChange);
-  trackingInterval.addEventListener('change', onTrackingIntervalChange);
-});
+  // Verificar si ya hay un token de autenticación
+  const token = localStorage.getItem('authToken');
+  if (!token) {
+    console.warn('No hay token de autenticación');
+  }
 
-// Formatear fecha para input datetime-local
-function formatDateForInput(date) {
-  return `${date.getFullYear()}-${padZero(date.getMonth() + 1)}-${padZero(
-    date.getDate()
-  )}T${padZero(date.getHours())}:${padZero(date.getMinutes())}`;
+  console.log('Aplicación inicializada');
 }
 
-// Añadir cero a números menores de 10
-function padZero(num) {
-  return num < 10 ? `0${num}` : num;
+function setupDatePickers() {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  // Formato YYYY-MM-DD para inputs date
+  const formatDate = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Configurar fechas predeterminadas
+  const startDateInput = document.getElementById('startDate');
+  const endDateInput = document.getElementById('endDate');
+
+  if (startDateInput) {
+    startDateInput.value = formatDate(yesterday);
+  }
+
+  if (endDateInput) {
+    endDateInput.value = formatDate(today);
+  }
 }
 
-// Cargar dispositivos en el select
+// Cargar lista de dispositivos
+// Cargar lista de dispositivos
 async function loadDevices() {
-  const devices = await getDevices();
+  try {
+    const response = await apiClient.getDevices();
+    console.log('Respuesta completa de getDevices:', response);
 
-  // Limpiar opciones actuales
-  deviceSelect.innerHTML =
-    '<option value="">Seleccione dispositivo...</option>';
+    // Intentar determinar el formato correcto de la respuesta
+    let devices = response;
 
-  // Añadir opciones
-  devices.forEach((deviceId) => {
+    // Si es un objeto con estructura { success: true, data: [...] }
+    if (response && typeof response === 'object' && response.data) {
+      devices = response.data;
+    }
+
+    // Si no hay dispositivos disponibles, crear demo
+    if (!devices || !Array.isArray(devices) || devices.length === 0) {
+      devices = [
+        { deviceId: 'dev001', name: 'Dispositivo 001' },
+        { deviceId: 'dev002', name: 'Dispositivo 002' },
+        { deviceId: 'dev003', name: 'Dispositivo 003' },
+      ];
+    }
+
+    populateDeviceSelect(devices);
+  } catch (error) {
+    console.error('Error cargando dispositivos:', error);
+
+    // En caso de error, cargar dispositivos de demostración
+    const demoDevices = [
+      { deviceId: 'dev001', name: 'Dispositivo 001' },
+      { deviceId: 'dev002', name: 'Dispositivo 002' },
+      { deviceId: 'dev003', name: 'Dispositivo 003' },
+    ];
+
+    populateDeviceSelect(demoDevices);
+  }
+}
+
+// Llenar select de dispositivos
+function populateDeviceSelect(devices) {
+  const select = document.getElementById('deviceSelect');
+  if (!select) return;
+
+  // Limpiar opciones existentes
+  select.innerHTML = '<option value="">Seleccione dispositivo...</option>';
+
+  // Verificar formato de devices
+  console.log('Formato de datos recibidos:', devices);
+
+  // Si devices no es un array o está vacío, usar dispositivos de demostración
+  if (!Array.isArray(devices) || devices.length === 0) {
+    console.log('Usando dispositivos de demostración');
+    devices = [
+      { deviceId: 'dev001', name: 'Dispositivo 001' },
+      { deviceId: 'dev002', name: 'Dispositivo 002' },
+      { deviceId: 'dev003', name: 'Dispositivo 003' },
+    ];
+  }
+
+  // Si devices es un objeto con una propiedad data que contiene el array (formato común de API)
+  if (
+    !Array.isArray(devices) &&
+    devices &&
+    devices.data &&
+    Array.isArray(devices.data)
+  ) {
+    console.log('Formato de API detectado, usando devices.data');
+    devices = devices.data;
+  }
+
+  // Agregar dispositivos
+  devices.forEach((device) => {
     const option = document.createElement('option');
-    option.value = deviceId;
-    option.textContent = deviceId;
-    deviceSelect.appendChild(option);
-  });
-}
-
-// Cargar estadísticas
-async function loadStats() {
-  const result = await getStats();
-
-  if (!result.success) {
-    statsContent.innerHTML = `<p class="error">Error: ${result.message}</p>`;
-    return;
-  }
-
-  const stats = result.stats;
-
-  statsContent.innerHTML = `
-        <div class="stat-item">
-            <strong>Total de ubicaciones:</strong> ${stats.totalLocations}
-        </div>
-        <div class="stat-item">
-            <strong>Ubicaciones recientes (30 días):</strong> ${
-              stats.recentLocations
-            }
-        </div>
-        <div class="stat-item">
-            <strong>Dispositivos registrados:</strong> ${stats.deviceCount}
-        </div>
-        <div class="stat-item">
-            <strong>Última actualización:</strong> ${
-              stats.lastUpdateAt
-                ? new Date(stats.lastUpdateAt).toLocaleString()
-                : 'N/A'
-            }
-        </div>
-    `;
-}
-
-// Evento de cambio de dispositivo
-async function onDeviceChange() {
-  const deviceId = deviceSelect.value;
-
-  if (!deviceId) {
-    routeHistoryContent.innerHTML =
-      '<p>Seleccione un dispositivo para ver su historial</p>';
-    return;
-  }
-
-  // Cargar historial de rutas
-  const result = await getRouteHistory(deviceId);
-
-  if (!result.success) {
-    routeHistoryContent.innerHTML = `<p class="error">Error: ${result.message}</p>`;
-    return;
-  }
-
-  if (result.dailyRoutes.length === 0) {
-    routeHistoryContent.innerHTML =
-      '<p>No hay datos de ruta disponibles para este dispositivo</p>';
-    return;
-  }
-
-  // Mostrar historial
-  let html = '';
-
-  result.dailyRoutes.forEach((day) => {
-    const date = new Date(day.date).toLocaleDateString();
-
-    // Determinar ciudades principales en el día
-    let cities = '';
-    if (day.previewRoute && day.previewRoute.length > 0) {
-      // Aquí normalmente verificaríamos las ciudades,
-      // pero como no tenemos esa info en el historial, mostramos genérico
-      cities = 'Área Metropolitana de Medellín';
-    }
-
-    html += `
-            <div class="route-item" data-date="${
-              day.date
-            }" data-device="${deviceId}">
-                <div class="date">${date}</div>
-                <div class="details">
-                    <span>${day.pointCount} puntos</span>
-                    ${cities ? `<span class="cities">${cities}</span>` : ''}
-                </div>
-            </div>
-        `;
+    option.value = device.deviceId;
+    option.textContent = device.name || `Dispositivo ${device.deviceId}`;
+    select.appendChild(option);
   });
 
-  routeHistoryContent.innerHTML = html;
-
-  // Mostrar vista previa del historial en el mapa
-  showRouteHistoryPreview(result.dailyRoutes);
-
-  // Añadir event listeners a los elementos del historial
-  document.querySelectorAll('.route-item').forEach((item) => {
-    item.addEventListener('click', onRouteItemClick);
-  });
-}
-
-// Evento de click en item de historial
-async function onRouteItemClick(event) {
-  const item = event.currentTarget;
-  const deviceId = item.dataset.device;
-  const dateStr = item.dataset.date;
-
-  // Convertir string a Date
-  const date = new Date(dateStr);
-
-  // Obtener rango de 24 horas
-  const startDate = new Date(date);
-  startDate.setHours(0, 0, 0, 0);
-
-  const endDate = new Date(date);
-  endDate.setHours(23, 59, 59, 999);
-
-  // Actualizar inputs de fecha
-  startDateInput.value = formatDateForInput(startDate);
-  endDateInput.value = formatDateForInput(endDate);
-
-  // Buscar ruta
-  await loadRouteForDateRange(deviceId, startDate, endDate);
-}
-
-// Evento de búsqueda
-async function onSearch() {
-  const deviceId = deviceSelect.value;
-
-  if (!deviceId) {
-    alert('Por favor seleccione un dispositivo');
-    return;
-  }
-
-  const startDateStr = startDateInput.value;
-  const endDateStr = endDateInput.value;
-
-  if (!startDateStr || !endDateStr) {
-    alert('Por favor seleccione fechas de inicio y fin');
-    return;
-  }
-
-  const startDate = new Date(startDateStr);
-  const endDate = new Date(endDateStr);
-
-  await loadRouteForDateRange(deviceId, startDate, endDate);
-}
-
-// Cargar ruta para un rango de fechas
-async function loadRouteForDateRange(deviceId, startDate, endDate) {
-  const result = await getDeviceRoute(deviceId, startDate, endDate);
-
-  if (!result.success) {
-    alert(`Error: ${result.message}`);
-    return;
-  }
-
-  // Mostrar ruta en el mapa
-  showDeviceRoute(result.route, deviceId);
-
-  // Resaltar elementos en el historial
-  document.querySelectorAll('.route-item').forEach((item) => {
-    item.classList.remove('active');
-
-    // Si la fecha del item está dentro del rango, marcar como activo
-    const itemDate = new Date(item.dataset.date);
-    if (
-      itemDate >= startDate.setHours(0, 0, 0, 0) &&
-      itemDate <= endDate.setHours(23, 59, 59, 999)
-    ) {
-      item.classList.add('active');
-    }
-  });
-}
-
-// Función para agregar datos de ejemplo (solo para desarrollo/pruebas)
-async function addSampleData() {
-  // Esta función simularía la inserción de datos de prueba en MongoDB
-  // Solo para uso en desarrollo, no debe usarse en producción
   console.log(
-    'Esta función sería implementada en un entorno real para agregar datos de ejemplo'
+    'Select de dispositivos actualizado con',
+    devices.length,
+    'dispositivos'
   );
 }
 
-// Evento de cambio del switch de seguimiento
-function onTrackingSwitchChange() {
-  const deviceId = deviceSelect.value;
+// Configurar controles de UI
+function setupUIControls() {
+  console.log('Configurando controles de UI...');
 
-  if (trackingSwitch.checked) {
-    // Iniciar seguimiento
-    if (!deviceId) {
-      alert('Por favor seleccione un dispositivo primero');
-      trackingSwitch.checked = false;
-      return;
-    }
+  // Switch de tracking
+  const trackingSwitch = document.getElementById('trackingSwitch');
+  if (trackingSwitch) {
+    trackingSwitch.addEventListener('change', function () {
+      toggleTracking(this.checked);
+    });
+  }
 
-    const intervalSeconds = parseInt(trackingInterval.value);
-    if (isNaN(intervalSeconds) || intervalSeconds < 1 || intervalSeconds > 60) {
-      alert('Por favor ingrese un intervalo válido entre 1 y 60 segundos');
-      trackingInterval.value = '5';
-      trackingSwitch.checked = false;
-      return;
-    }
+  // Input de intervalo
+  const intervalInput = document.getElementById('trackingInterval');
+  if (intervalInput) {
+    intervalInput.addEventListener('change', function () {
+      trackingIntervalSeconds = parseInt(this.value) || 5;
 
-    // Iniciar seguimiento
-    const started = startLiveTracking(deviceId, intervalSeconds);
+      // Si el tracking está activo, reiniciar con nuevo intervalo
+      if (trackingEnabled) {
+        toggleTracking(false);
+        toggleTracking(true);
+      }
+    });
+  }
 
-    if (started) {
-      trackingStatus.textContent = `Activo (${intervalSeconds}s)`;
-      trackingStatus.classList.add('active');
-      trackingStatus.classList.remove('error');
+  // Botón de búsqueda
+  const searchButton = document.getElementById('searchButton');
+  if (searchButton) {
+    searchButton.addEventListener('click', searchLocationHistory);
+  }
+
+  console.log('Controles de UI configurados');
+}
+
+// Activar/Desactivar tracking en tiempo real
+function toggleTracking(enable) {
+  trackingEnabled = enable;
+
+  const statusIndicator = document.getElementById('trackingStatus');
+  if (statusIndicator) {
+    statusIndicator.textContent = trackingEnabled ? 'Activo' : 'Inactivo';
+    statusIndicator.className = trackingEnabled
+      ? 'status-indicator active'
+      : 'status-indicator';
+  }
+
+  if (trackingEnabled) {
+    // Si hay un dispositivo seleccionado, subscribirse
+    const deviceSelect = document.getElementById('deviceSelect');
+    if (deviceSelect && deviceSelect.value) {
+      currentDevice = deviceSelect.value;
+      subscribeToDevice(currentDevice);
     } else {
-      trackingStatus.textContent = 'Error al iniciar';
-      trackingStatus.classList.add('error');
-      trackingStatus.classList.remove('active');
-      trackingSwitch.checked = false;
+      // Subscribirse a todos
+      subscribeToAllDevices();
     }
+
+    console.log('Tracking activado');
   } else {
-    // Detener seguimiento
-    stopLiveTracking();
-    trackingStatus.textContent = 'Inactivo';
-    trackingStatus.classList.remove('active', 'error');
+    // Desactivar interval si existe
+    if (trackingInterval) {
+      clearInterval(trackingInterval);
+      trackingInterval = null;
+    }
+
+    console.log('Tracking desactivado');
   }
 }
 
-// Evento de cambio del intervalo de seguimiento
-function onTrackingIntervalChange() {
-  const intervalSeconds = parseInt(trackingInterval.value);
+// Subscribirse a un dispositivo específico
+function subscribeToDevice(deviceId) {
+  if (window.trackerWebSocket && window.trackerWebSocket.socket) {
+    const socket = window.trackerWebSocket.socket;
 
-  // Validar entrada
-  if (isNaN(intervalSeconds) || intervalSeconds < 1) {
-    trackingInterval.value = '1';
-  } else if (intervalSeconds > 60) {
-    trackingInterval.value = '60';
-  }
+    if (socket.readyState === 1) {
+      // WebSocket.OPEN
+      socket.send(
+        JSON.stringify({
+          action: 'subscribe',
+          deviceId: deviceId,
+        })
+      );
 
-  // Si el seguimiento está activo, reiniciarlo con el nuevo intervalo
-  if (trackingSwitch.checked) {
-    const deviceId = deviceSelect.value;
-
-    // Detener el seguimiento actual
-    stopLiveTracking();
-
-    // Reiniciar con el nuevo intervalo
-    const intervalVal = parseInt(trackingInterval.value);
-    const started = startLiveTracking(deviceId, intervalVal);
-
-    if (started) {
-      trackingStatus.textContent = `Activo (${intervalVal}s)`;
+      console.log(`Subscrito a dispositivo ${deviceId}`);
     }
   }
 }
 
-// Desactivar seguimiento cuando cambia el dispositivo seleccionado
-function disableTrackingOnDeviceChange() {
-  if (trackingSwitch.checked) {
-    trackingSwitch.checked = false;
-    stopLiveTracking();
-    trackingStatus.textContent = 'Inactivo';
-    trackingStatus.classList.remove('active', 'error');
+// Subscribirse a todos los dispositivos
+function subscribeToAllDevices() {
+  if (window.trackerWebSocket && window.trackerWebSocket.socket) {
+    const socket = window.trackerWebSocket.socket;
+
+    if (socket.readyState === 1) {
+      // WebSocket.OPEN
+      socket.send(
+        JSON.stringify({
+          action: 'subscribeAll',
+        })
+      );
+
+      console.log('Subscrito a todos los dispositivos');
+    }
   }
 }
 
-// Modificar onDeviceChange para desactivar seguimiento al cambiar dispositivo
-const originalOnDeviceChange = onDeviceChange;
-onDeviceChange = async function () {
-  disableTrackingOnDeviceChange();
-  await originalOnDeviceChange();
-};
+// Buscar historial de ubicaciones
+async function searchLocationHistory() {
+  const deviceSelect = document.getElementById('deviceSelect');
+  const startDateInput = document.getElementById('startDate');
+  const endDateInput = document.getElementById('endDate');
 
-// Modificar onSearch para desactivar seguimiento al iniciar búsqueda
-const originalOnSearch = onSearch;
-onSearch = async function () {
-  disableTrackingOnDeviceChange();
-  await originalOnSearch();
-};
+  if (!deviceSelect || !startDateInput || !endDateInput) return;
 
-// Modificar onRouteItemClick para desactivar seguimiento al seleccionar una ruta del historial
-const originalOnRouteItemClick = onRouteItemClick;
-onRouteItemClick = async function (event) {
-  disableTrackingOnDeviceChange();
-  await originalOnRouteItemClick(event);
-};
+  const deviceId = deviceSelect.value;
+  const startDate = startDateInput.value;
+  const endDate = endDateInput.value;
+
+  if (!deviceId || !startDate || !endDate) {
+    alert('Por favor complete todos los campos de búsqueda');
+    return;
+  }
+
+  try {
+    console.log(
+      `Buscando historial para ${deviceId} entre ${startDate} y ${endDate}`
+    );
+
+    const locations = await apiClient.getLocationHistory(
+      deviceId,
+      startDate,
+      endDate
+    );
+
+    if (!locations || locations.length === 0) {
+      alert('No se encontraron datos para el período seleccionado');
+      return;
+    }
+
+    // Mostrar ruta en mapa
+    displayRouteHistory(deviceId, locations);
+
+    // Actualizar historial
+    updateRouteHistory(deviceId, locations);
+
+    console.log(`Se encontraron ${locations.length} ubicaciones`);
+  } catch (error) {
+    console.error('Error buscando historial:', error);
+    alert('Error al buscar historial de ubicaciones');
+  }
+}
+
+// Mostrar ruta histórica en mapa
+function displayRouteHistory(deviceId, locations) {
+  if (!window.mapController) return;
+
+  // Enfocar dispositivo
+  window.mapController.focusDevice(deviceId);
+
+  // Crear o actualizar ruta
+  // (Esto debería implementarse en el controlador del mapa)
+}
+
+// Actualizar panel de historial
+function updateRouteHistory(deviceId, locations) {
+  const historyContent = document.getElementById('route-history-content');
+  if (!historyContent) return;
+
+  // Limpiar contenido actual
+  historyContent.innerHTML = '';
+
+  // Crear lista de ubicaciones
+  const list = document.createElement('ul');
+  list.className = 'location-list';
+
+  // Añadir max 10 ubicaciones para no sobrecargar
+  const displayLocations = locations.slice(0, 10);
+
+  displayLocations.forEach((location) => {
+    const item = document.createElement('li');
+
+    const time = new Date(location.timestamp).toLocaleTimeString();
+    const city = location.city || 'Desconocida';
+
+    item.textContent = `${time} - ${city}`;
+    list.appendChild(item);
+  });
+
+  historyContent.appendChild(list);
+
+  // Añadir indicador si hay más
+  if (locations.length > 10) {
+    const moreInfo = document.createElement('p');
+    moreInfo.className = 'more-info';
+    moreInfo.textContent = `... y ${locations.length - 10} ubicaciones más`;
+    historyContent.appendChild(moreInfo);
+  }
+}
+
+// Inicializar cuando el DOM esté listo
+document.addEventListener('DOMContentLoaded', initApp);

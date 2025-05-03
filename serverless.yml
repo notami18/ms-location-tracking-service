@@ -1,34 +1,123 @@
-service: api-metro-dev-location-tracking-service
+service: gps-tracking-system
 
-frameworkVersion: '3'
+frameworkVersion: "3"
 
 provider:
   name: aws
-  runtime: nodejs20.x
+  runtime: nodejs16.x
+  region: us-east-1
   stage: ${opt:stage, 'dev'}
-  region: ${opt:region, 'us-east-1'}
-  timeout: 30
-  memorySize: 512
   environment:
-    MONGODB_URI: ${ssm:/metro/${self:provider.stage}/mongodb/uri}
-    MONGODB_DB: ${ssm:/metro/${self:provider.stage}/mongodb/db}
-    JWT_SECRET: ${ssm:/metro/${self:provider.stage}/jwt/secret}
-    NODE_ENV: ${self:provider.stage}
+    MONGODB_URI: ${env:MONGODB_URI}
+    MONGODB_DB: ${env:MONGODB_DB}
+    JWT_SECRET: ${env:JWT_SECRET}
+    CONNECTIONS_TABLE: ${self:service}-connections-${self:provider.stage}
+    WEBSOCKET_API_ID: !Ref WebsocketsApi
+    WEBSOCKET_ENABLED: true
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:DeleteItem
+        - dynamodb:Query
+      Resource:
+        - !GetAtt ConnectionsTable.Arn
+        - !Join ["/", [!GetAtt ConnectionsTable.Arn, "index", "deviceId-index"]]
+    - Effect: Allow
+      Action:
+        - execute-api:ManageConnections
+      Resource:
+        - !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebsocketsApi}/${self:provider.stage}/*
 
 functions:
+  # Funciones REST existentes
   api:
     handler: lambda.handler
     events:
       - http:
-          path: /{proxy+}
+          path: /api/{proxy+}
           method: any
           cors: true
+          authorizer:
+            name: authorizerFunc
+            type: request
+            identitySource: method.request.header.Authorization
 
-plugins:
-  - serverless-offline
-  - serverless-dotenv-plugin
+  # Lambda Authorizer (existente)
+  authorizerFunc:
+    handler: src/middleware/auth.authorize
+    environment:
+      JWT_SECRET: ${env:JWT_SECRET}
 
-custom:
-  serverless-offline:
-    httpPort: 3000
-    lambdaPort: 3002
+  # Nuevas funciones WebSocket
+  websocketConnect:
+    handler: src/websocket/handler.onConnect
+    events:
+      - websocket:
+          route: $connect
+          authorizer:
+            name: websocketAuthorizerFunc
+            identitySource:
+              - route.request.querystring.token
+
+  websocketDisconnect:
+    handler: src/websocket/handler.onDisconnect
+    events:
+      - websocket:
+          route: $disconnect
+
+  websocketDefault:
+    handler: src/websocket/handler.onDefault
+    events:
+      - websocket:
+          route: $default
+
+  # Authorizer para WebSocket
+  websocketAuthorizerFunc:
+    handler: src/middleware/auth.authorizeWebSocket
+
+  # Función para procesamiento de ubicaciones (IoT Core -> Lambda)
+  processLocation:
+    handler: src/handlers/locationHandler.processLocation
+    events:
+      - iot:
+          sql: "SELECT * FROM 'devices/location'"
+          name: LocationRule
+          sqlVersion: "2016-03-23"
+          description: "Procesa mensajes de ubicación de dispositivos"
+
+resources:
+  Resources:
+    # Tabla DynamoDB para conexiones WebSocket
+    ConnectionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.CONNECTIONS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+          - AttributeName: deviceId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: deviceId-index
+            KeySchema:
+              - AttributeName: deviceId
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+
+    # WebSocket API es creada automáticamente por Serverless
+    WebsocketsApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: ${self:service}-websocket-${self:provider.stage}
+        ProtocolType: WEBSOCKET
+        RouteSelectionExpression: $request.body.action
