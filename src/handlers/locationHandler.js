@@ -56,6 +56,7 @@ exports.processLocation = async (event, context) => {
       city: payload.city || 'Desconocido',
       metadata: payload.metadata || {},
       receivedAt: new Date(),
+      isActive: true, // Marcar como activo al recibir una nueva ubicación
     };
 
     // Conectar a MongoDB
@@ -65,25 +66,14 @@ exports.processLocation = async (event, context) => {
     const locationCollection = db.collection('deviceLocations');
     await locationCollection.insertOne(locationDoc);
 
-    // Actualizar info del dispositivo
-    const deviceCollection = db.collection('devices');
-    await deviceCollection.updateOne(
+    // Actualizar el estado de actividad del dispositivo en la misma colección
+    await locationCollection.updateMany(
       { deviceId: payload.deviceId },
       {
         $set: {
-          lastSeen: new Date(),
-          lastLocation: locationDoc.location,
-          lastCity: locationDoc.city,
-          updatedAt: new Date(),
+          isActive: true, // Marcar como activo
         },
-        $setOnInsert: {
-          name: `Device ${payload.deviceId.substring(
-            payload.deviceId.length - 8
-          )}`,
-          createdAt: new Date(),
-        },
-      },
-      { upsert: true }
+      }
     );
 
     // Si WebSockets está habilitado, enviar notificación
@@ -92,11 +82,6 @@ exports.processLocation = async (event, context) => {
       process.env.WEBSOCKET_API_ID
     ) {
       try {
-        // Importar función de broadcast
-        const {
-          broadcastToDeviceSubscribers,
-        } = require('../websocket/broadcast');
-
         const stage = process.env.STAGE || 'dev';
         const region = process.env.AWS_REGION || 'us-east-1';
 
@@ -125,7 +110,7 @@ exports.processLocation = async (event, context) => {
           locationMessage
         );
       } catch (error) {
-        logger.error('Error enviando notificación WebSocket:', error);
+        console.error('Error enviando notificación WebSocket:', error);
         // Continuamos con la ejecución aunque falle la notificación
       }
     }

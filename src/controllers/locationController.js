@@ -1,5 +1,70 @@
 const { connectToDatabase } = require('../config/mongodb');
 const logger = require('../utils/logger');
+const locationWebsocketService = require('../services/locationWebsocketService');
+
+// Almacenar nueva ubicación y notificar a suscriptores vía WebSocket
+exports.storeLocation = async (req, res, next) => {
+  try {
+    const db = await connectToDatabase();
+    const collection = db.collection('deviceLocations');
+    
+    // Obtener datos de la solicitud
+    const locationData = req.body;
+    
+    // Validar datos mínimos requeridos
+    if (!locationData.deviceId || !locationData.location) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren deviceId y coordenadas de ubicación'
+      });
+    }
+    
+    // Asegurar que la ubicación tenga el formato correcto para GeoJSON
+    if (!locationData.location.coordinates || locationData.location.coordinates.length !== 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Las coordenadas deben tener formato [longitud, latitud]'
+      });
+    }
+    
+    // Añadir metadatos
+    const enhancedLocation = {
+      ...locationData,
+      timestamp: locationData.timestamp ? new Date(locationData.timestamp) : new Date(),
+      isActive: locationData.isActive !== false, // Por defecto activo si no se especifica
+      receivedAt: new Date()
+    };
+    
+    // Añadir este log para depuración
+    console.log('Nueva ubicación recibida:', req.body);
+    
+    // Guardar en base de datos
+    const result = await collection.insertOne(enhancedLocation);
+    
+    console.log('Enviando a WebSocket...');
+    
+    // Asegurar que esta línea se ejecuta - usar await para confirmar
+    await locationWebsocketService.broadcastLocationUpdate(enhancedLocation)
+      .then(broadcastResult => {
+        console.log('Resultado del broadcast:', broadcastResult);
+      })
+      .catch(error => {
+        console.error('Error en broadcast:', error);
+      });
+    
+    res.status(201).json({
+      success: true,
+      message: 'Ubicación almacenada correctamente',
+      data: {
+        deviceId: enhancedLocation.deviceId,
+        timestamp: enhancedLocation.timestamp
+      }
+    });
+  } catch (error) {
+    logger.error('Error al almacenar ubicación:', error);
+    next(error);
+  }
+};
 
 // Obtener todas las ubicaciones (con paginación)
 exports.getAllLocations = async (req, res, next) => {
@@ -182,7 +247,7 @@ exports.getDeviceRoute = async (req, res, next) => {
     }
 
     // Loguear la consulta para debugging
-    console.log(
+    logger.debug(
       `Buscando rutas para dispositivo ${deviceId} desde ${startDate.toISOString()} hasta ${endDate.toISOString()}`
     );
 
@@ -198,7 +263,7 @@ exports.getDeviceRoute = async (req, res, next) => {
       .sort({ timestamp: 1 })
       .toArray();
 
-    console.log(`Se encontraron ${locations.length} puntos de ubicación`);
+    logger.debug(`Se encontraron ${locations.length} puntos de ubicación`);
 
     // Si no hay datos, devolver un arreglo vacío pero con mensaje informativo
     if (locations.length === 0) {
@@ -223,7 +288,7 @@ exports.getDeviceRoute = async (req, res, next) => {
           !loc.location.coordinates ||
           loc.location.coordinates.length < 2
         ) {
-          console.warn(
+          logger.warn(
             `Ubicación con formato incorrecto: ${JSON.stringify(loc)}`
           );
           return null;
@@ -248,7 +313,7 @@ exports.getDeviceRoute = async (req, res, next) => {
       route: route,
     });
   } catch (error) {
-    console.error('Error al obtener ruta del dispositivo:', error);
+    logger.error('Error al obtener ruta del dispositivo:', error);
     next(error);
   }
 };
@@ -345,52 +410,54 @@ exports.getLatestLocation = async (req, res, next) => {
       location: formattedLocation,
     });
   } catch (error) {
-    console.error('Error al obtener la última ubicación:', error);
+    logger.error('Error al obtener la última ubicación:', error);
     next(error);
   }
 };
 
+// Obtener dispositivos activos - con mejoras para WebSocket
 exports.getActiveDevices = async (req, res, next) => {
   try {
     const db = await connectToDatabase();
-    const deviceCollection = db.collection('devices');
     const locationCollection = db.collection('deviceLocations');
 
-    // Definir "activo" como dispositivos con ubicación en las últimas 2 horas
+    // Definir "activo" como dispositivos con ubicación en las últimas 2 horas y con isActive en true
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
 
-    // Obtener los dispositivos activos
-    const activeDevices = await deviceCollection
-      .find({ lastSeen: { $gte: twoHoursAgo } })
+    // Obtener los dispositivos activos directamente desde deviceLocations
+    const activeDevices = await locationCollection
+      .aggregate([
+        {
+          $match: {
+            timestamp: { $gte: twoHoursAgo },
+            isActive: true, // Filtrar por dispositivos activos
+          },
+        },
+        {
+          $sort: { timestamp: -1 },
+        },
+        {
+          $group: {
+            _id: '$deviceId',
+            latestLocation: { $first: '$$ROOT' },
+          },
+        },
+      ])
       .toArray();
 
-    // Para cada dispositivo, obtener su última ubicación
-    const devicesWithLocation = await Promise.all(
-      activeDevices.map(async (device) => {
-        const latestLocation = await locationCollection
-          .find({ deviceId: device.deviceId })
-          .sort({ timestamp: -1 })
-          .limit(1)
-          .toArray();
-
-        return {
-          deviceId: device.deviceId,
-          name: device.name || device.deviceId,
-          lastSeen: device.lastSeen,
-          location:
-            latestLocation.length > 0
-              ? {
-                  lat: latestLocation[0].location.coordinates[1],
-                  lng: latestLocation[0].location.coordinates[0],
-                  timestamp: latestLocation[0].timestamp,
-                  accuracy: latestLocation[0].accuracy || 0,
-                  city: latestLocation[0].city || 'Desconocido',
-                  isMock: latestLocation[0].isMock || false,
-                }
-              : null,
-        };
-      })
-    );
+    // Formatear los datos para la respuesta
+    const devicesWithLocation = activeDevices.map((device) => ({
+      deviceId: device._id,
+      lastSeen: device.latestLocation.timestamp,
+      location: {
+        lat: device.latestLocation.location.coordinates[1],
+        lng: device.latestLocation.location.coordinates[0],
+        timestamp: device.latestLocation.timestamp,
+        accuracy: device.latestLocation.accuracy || 0,
+        city: device.latestLocation.city || 'Desconocido',
+        isMock: device.latestLocation.isMock || false,
+      },
+    }));
 
     res.json({
       success: true,
@@ -398,7 +465,80 @@ exports.getActiveDevices = async (req, res, next) => {
       devices: devicesWithLocation,
     });
   } catch (error) {
-    console.error('Error al obtener dispositivos activos:', error);
+    logger.error('Error al obtener dispositivos activos:', error);
     next(error);
   }
+};
+
+// Nueva función para actualizar estado activo/inactivo de un dispositivo
+exports.updateDeviceActiveStatus = async (req, res, next) => {
+  try {
+    const db = await connectToDatabase();
+    const collection = db.collection('deviceLocations');
+
+    const { deviceId } = req.params;
+    const { isActive } = req.body;
+
+    if (isActive === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requiere el campo isActive (boolean)'
+      });
+    }
+
+    // Buscar la ubicación más reciente del dispositivo
+    const latestLocation = await collection
+      .find({ deviceId })
+      .sort({ timestamp: -1 })
+      .limit(1)
+      .toArray();
+
+    if (latestLocation.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No se encontró el dispositivo'
+      });
+    }
+
+    // Actualizar el estado activo de la ubicación más reciente
+    await collection.updateOne(
+      { _id: latestLocation[0]._id },
+      { $set: { isActive: Boolean(isActive) } }
+    );
+
+    // Obtener la ubicación actualizada
+    const updatedLocation = await collection.findOne({ _id: latestLocation[0]._id });
+
+    // Notificar a los suscriptores vía WebSocket
+    locationWebsocketService.broadcastLocationUpdate(updatedLocation)
+      .catch(error => logger.error('Error en broadcast de cambio de estado:', error));
+
+    // Refrescar la lista de dispositivos activos para suscriptores globales
+    locationWebsocketService.broadcastActiveDevicesStatus()
+      .catch(error => logger.error('Error en broadcast de dispositivos activos:', error));
+
+    res.json({
+      success: true,
+      deviceId,
+      isActive: Boolean(isActive),
+      message: `Estado activo del dispositivo actualizado a ${isActive ? 'activo' : 'inactivo'}`
+    });
+  } catch (error) {
+    logger.error('Error al actualizar estado de dispositivo:', error);
+    next(error);
+  }
+};
+
+// Exportación de todas las funciones del controlador
+module.exports = {
+  storeLocation: exports.storeLocation,
+  getAllLocations: exports.getAllLocations,
+  getLocationsByDevice: exports.getLocationsByDevice,
+  searchLocationsInArea: exports.searchLocationsInArea,
+  getLatestLocations: exports.getLatestLocations,
+  getDeviceRoute: exports.getDeviceRoute,
+  getPublicLocations: exports.getPublicLocations,
+  getLatestLocation: exports.getLatestLocation,
+  getActiveDevices: exports.getActiveDevices,
+  updateDeviceActiveStatus: exports.updateDeviceActiveStatus
 };

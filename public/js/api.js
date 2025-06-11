@@ -42,15 +42,14 @@ const apiClient = {
         const token = localStorage.getItem('authToken');
 
         if (token) {
-          response = await fetch('/api/devices', {
+          response = await fetch('/api/dashboard/stats', {
             headers: {
               Authorization: `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
           });
         } else {
-          // Intentar sin token en desarrollo
-          response = await fetch('/api/devices');
+          response = await fetch('/api/dashboard/stats');
         }
 
         if (!response.ok) {
@@ -63,81 +62,39 @@ const apiClient = {
         // Manejar diferentes formatos de respuesta
         let devices = result;
 
-        if (result && result.data) {
+        if (result?.data) {
           devices = result.data;
-        } else if (result && result.devices) {
-          devices = result.devices;
+        } else if (result?.stats?.devices) {
+          devices = result.stats.devices;
         }
 
         if (Array.isArray(devices) && devices.length > 0) {
           return devices;
         }
-
-        // Si no se encontraron dispositivos, intentar extraerlos de la colección de ubicaciones
-        console.log(
-          'No se encontraron dispositivos, intentando extraer de ubicaciones'
-        );
-        response = await fetch('/api/locations/latest');
-
-        if (response.ok) {
-          const locations = await response.json();
-          console.log('Ubicaciones obtenidas:', locations);
-
-          // Extraer deviceIds únicos de las ubicaciones
-          const deviceMap = {};
-
-          if (Array.isArray(locations)) {
-            locations.forEach((loc) => {
-              if (loc.deviceId) {
-                deviceMap[loc.deviceId] = {
-                  deviceId: loc.deviceId,
-                  name: `Dispositivo ${loc.deviceId.replace(
-                    'AndroidDevice_',
-                    ''
-                  )}`,
-                  lastLocation: loc.location,
-                  lastSeen: loc.timestamp,
-                };
-              }
-            });
-          } else if (locations.data && Array.isArray(locations.data)) {
-            locations.data.forEach((loc) => {
-              if (loc.deviceId) {
-                deviceMap[loc.deviceId] = {
-                  deviceId: loc.deviceId,
-                  name: `Dispositivo ${loc.deviceId.replace(
-                    'AndroidDevice_',
-                    ''
-                  )}`,
-                  lastLocation: loc.location,
-                  lastSeen: loc.timestamp,
-                };
-              }
-            });
-          }
-
-          const extractedDevices = Object.values(deviceMap);
-          if (extractedDevices.length > 0) {
-            return extractedDevices;
-          }
-        }
       }
-
-      // Si todo lo anterior falla o no estamos en desarrollo, usar dispositivos de demo
-      return [
-        { deviceId: 'dev001', name: 'Dispositivo 001' },
-        { deviceId: 'dev002', name: 'Dispositivo 002' },
-        { deviceId: 'dev003', name: 'Dispositivo 003' },
-      ];
     } catch (error) {
       console.error('Error obteniendo dispositivos:', error);
-      // Incluir el dispositivo que mencionas explícitamente
-      return [
-        { deviceId: 'AndroidDevice_e704144c', name: 'Dispositivo e704144c' },
-        { deviceId: 'dev001', name: 'Dispositivo 001' },
-        { deviceId: 'dev002', name: 'Dispositivo 002' },
-        { deviceId: 'dev003', name: 'Dispositivo 003' },
-      ];
+    }
+  },
+
+  async getStats() {
+    try {
+      const response = await fetch('/api/dashboard/stats', {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error obteniendo estadísticas:', error);
+      return { success: false, message: 'Error obteniendo estadísticas' };
     }
   },
 
@@ -207,6 +164,48 @@ const apiClient = {
     } catch (error) {
       console.error('Error en getLatestLocation:', error);
       return null;
+    }
+  },
+
+  async getRouteHistory(deviceId, days = 7) {
+    try {
+      const response = await fetch(
+        `/api/dashboard/route-history?deviceId=${deviceId}&days=${days}`,
+        {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      return await response.json();
+    } catch (error) {
+      console.error('Error al obtener historial de rutas:', error);
+      return { success: false, message: error.message };
+    }
+  },
+
+  async getDeviceRoute(deviceId, startDate, endDate) {
+    try {
+      let url = `/api/locations/route/${deviceId}`;
+
+      // Añadir parámetros de fecha si están disponibles
+      if (startDate && endDate) {
+        url += `?startDate=${startDate.toISOString()}&endDate=${endDate.toISOString()}`;
+      }
+
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('authToken')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      return await response.json();
+    } catch (error) {
+      console.error('Error al obtener ruta del dispositivo:', error);
+      return { success: false, message: error.message };
     }
   },
 };

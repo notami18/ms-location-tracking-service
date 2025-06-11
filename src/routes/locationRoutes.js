@@ -1,20 +1,37 @@
+// src/routes/locationRoutes.js
 const express = require('express');
+const router = express.Router();
 const locationController = require('../controllers/locationController');
 const { authenticate } = require('../middleware/auth');
 
-const router = express.Router();
+// Determinar si estamos en entorno de desarrollo
+const isDevelopment = process.env.NODE_ENV === 'development' || process.env.IS_OFFLINE === 'true';
 
 // Rutas públicas
-router.get('/latest/public', locationController.getPublicLocations);
+router.get('/public', locationController.getPublicLocations);
 
-// Rutas protegidas
-router.use(authenticate);
+// Condicionar la autenticación según el entorno
+if (!isDevelopment) {
+  // En producción, usar autenticación
+  router.use(authenticate);
+}
+
+// En desarrollo, estas rutas no requerirán autenticación
+// En producción, estarán protegidas por el middleware anterior
+
+// Rutas para obtener ubicaciones
 router.get('/', locationController.getAllLocations);
-router.get('/latest', locationController.getLatestLocations);
-router.get('/latest/:deviceId', locationController.getLatestLocation);
 router.get('/device/:deviceId', locationController.getLocationsByDevice);
-router.get('/area', locationController.searchLocationsInArea);
-router.get('/route/:deviceId', locationController.getDeviceRoute);
-router.get('/active-devices', locationController.getActiveDevices);
+router.get('/latest', locationController.getLatestLocations);
+router.get('/device/:deviceId/latest', locationController.getLatestLocation);
+router.get('/device/:deviceId/route', locationController.getDeviceRoute);
+router.get('/search', locationController.searchLocationsInArea);
+router.get('/active', locationController.getActiveDevices);
 
-module.exports = router; // Asegúrate de que se exporte el router
+// Rutas para registrar ubicaciones
+router.post('/', locationController.storeLocation);
+
+// Nueva ruta para actualizar estado activo de dispositivos
+router.patch('/device/:deviceId/active', locationController.updateDeviceActiveStatus);
+
+module.exports = router;

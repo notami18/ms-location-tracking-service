@@ -1,207 +1,197 @@
 // app-local.js
-require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const morgan = require('morgan');
 const cors = require('cors');
+const morgan = require('morgan');
 const path = require('path');
+require('dotenv').config();
 
-// Importar routers
-const deviceRoutes = require('./src/routes/deviceRoutes');
+// Importar rutas y controladores
 const locationRoutes = require('./src/routes/locationRoutes');
+const deviceRoutes = require('./src/routes/deviceRoutes');
 const dashboardRoutes = require('./src/routes/dashboardRoutes');
-
-// WebSocket handlers
+const deviceHistoryRoutes = require('./src/routes/deviceHistoryRoutes');
+const errorHandler = require('./src/middleware/errorHandler');
+const logger = require('./src/utils/logger');
 const {
   onConnect,
   onDisconnect,
   onDefault,
+  sendMessageToClient,
 } = require('./src/websocket/handler');
+const {
+  storeConnection,
+  deleteConnection,
+} = require('./src/websocket/connection');
 
-// Middleware
-const { authenticate } = require('./src/middleware/auth');
-const errorHandler = require('./src/middleware/errorHandler');
-
-// Crear aplicación Express
+// Inicializar express
 const app = express();
 const server = http.createServer(app);
 
-// WebSocket Server
-const wss = new WebSocket.Server({
-  server,
-  path: '/ws', // Ruta para WebSocket
-});
-
-// Middleware
+// Configuración de middleware
 app.use(cors());
-app.use(morgan('dev'));
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-// Servir archivos estáticos
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Rutas API
-app.use('/api/devices', authenticate, deviceRoutes);
-app.use('/api/locations', authenticate, locationRoutes);
-app.use('/api/dashboard', authenticate, dashboardRoutes);
+// Rutas API REST
+app.use('/api/locations', locationRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
-// Ruta para obtener token JWT (solo para desarrollo)
-app.post('/auth/login', (req, res) => {
-  const { username, password } = req.body;
+// Rutas para el historial de dispositivos
+app.use('/api/history', deviceHistoryRoutes);
 
-  // Validación simple para desarrollo
-  if (username === 'demo' && password === 'demo') {
-    const jwt = require('jsonwebtoken');
-
-    // Crear token JWT válido por 24 horas
-    const token = jwt.sign(
-      { sub: 'user123', name: 'Demo User', roles: ['user'] },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    res.json({ token });
-  } else {
-    res.status(401).json({ message: 'Credenciales inválidas' });
-  }
+// Ruta principal para la UI web
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Ruta para recibir actualizaciones simuladas (solo desarrollo)
-app.post('/simulate-location-update', async (req, res) => {
-  try {
-    const locationData = req.body;
 
-    // Importar función de broadcast
-    const {
-      broadcastToDeviceSubscribers,
-    } = require('./src/websocket/broadcast');
 
-    // Formatear mensaje para WebSocket
-    const locationMessage = {
-      type: 'locationUpdate',
-      deviceId: locationData.deviceId,
-      data: {
-        lat: locationData.lat,
-        lng: locationData.lng,
-        timestamp: locationData.timestamp,
-        accuracy: locationData.accuracy,
-        speed: locationData.speed,
-        city: locationData.city,
-        isMock: locationData.isMock,
-      },
-    };
+// Configuración de WebSocket para desarrollo local
+const wss = new WebSocket.Server({ server, path: '/ws' });
 
-    // Enviar a WebSocket (simulando respuesta de API Gateway)
-    const clients = [...wss.clients];
-    for (const client of clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(locationMessage));
-      }
-    }
+// Mantener registro de conexiones activas
+const activeConnections = new Map();
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error procesando ubicación simulada:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+// Configurar WebSocket Server
+wss.on('connection', async function connection(ws, req) {
+  // Extraer URL de la solicitud para obtener parámetros
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const connectionId = `conn_${Date.now()}_${Math.random()
+    .toString(36)
+    .substring(2, 15)}`;
 
-// WebSocket connection handling
-wss.on('connection', (ws, req) => {
-  console.log('Nueva conexión WebSocket');
+  // Registrar conexión
+  activeConnections.set(connectionId, ws);
+  logger.info(`Nueva conexión WebSocket: ${connectionId}`);
 
-  // En desarrollo, no validamos el token para simplificar pruebas
-  // pero simulamos un connectionId como lo haría API Gateway
-  const connectionId = Math.random().toString(36).substring(2, 15);
-  ws.connectionId = connectionId;
-
-  // Emular evento $connect
+  // Simular event de API Gateway para onConnect
   const connectEvent = {
     requestContext: {
-      connectionId,
+      connectionId: connectionId,
       authorizer: {
-        principalId: 'user123',
+        principalId: 'anonymous-local',
       },
     },
   };
 
-  // Manejar conexión
-  onConnect(connectEvent);
+  // Almacenar conexión en DynamoDB o almacén local
+  await onConnect(connectEvent);
 
   // Manejar mensajes
-  ws.on('message', (message) => {
-    console.log('Mensaje recibido:', message.toString());
+  ws.on('message', async function incoming(message) {
+    try {
+      const data = message.toString();
+      logger.debug(`Mensaje recibido de ${connectionId}: ${data}`);
 
-    // Emular evento de mensaje
-    const messageEvent = {
-      requestContext: {
-        connectionId,
-        domainName: 'localhost',
-        stage: 'dev',
-      },
-      body: message.toString(),
-    };
+      // Simular event de API Gateway para onDefault
+      const messageEvent = {
+        requestContext: {
+          connectionId: connectionId,
+          domainName: 'localhost',
+          stage: 'local',
+        },
+        body: data,
+      };
 
-    // Procesar mensaje
-    onDefault(messageEvent)
-      .then(() => console.log('Mensaje procesado'))
-      .catch((err) => console.error('Error procesando mensaje:', err));
+      // Procesar mensaje
+      await onDefault(messageEvent);
+    } catch (error) {
+      logger.error(`Error procesando mensaje de ${connectionId}:`, error);
+    }
   });
 
   // Manejar cierre de conexión
-  ws.on('close', () => {
-    console.log('Conexión cerrada:', connectionId);
+  ws.on('close', async function close() {
+    logger.info(`Conexión cerrada: ${connectionId}`);
 
-    // Emular evento $disconnect
+    // Simular event de API Gateway para onDisconnect
     const disconnectEvent = {
       requestContext: {
-        connectionId,
+        connectionId: connectionId,
       },
     };
 
-    onDisconnect(disconnectEvent)
-      .then(() => console.log('Desconexión procesada'))
-      .catch((err) => console.error('Error procesando desconexión:', err));
+    // Eliminar conexión de DynamoDB o almacén local
+    await onDisconnect(disconnectEvent);
+
+    // Eliminar de conexiones activas
+    activeConnections.delete(connectionId);
   });
 
-  // Enviar mensaje de bienvenida
-  ws.send(
-    JSON.stringify({
-      type: 'connection',
-      status: 'connected',
-      connectionId,
-    })
-  );
+  // Manejar errores
+  ws.on('error', function error(err) {
+    logger.error(`Error en WebSocket ${connectionId}:`, err);
+  });
 });
 
-// Mock del sendToConnection para desarrollo
+// Función global para enviar mensajes a conexiones WebSocket
 global.sendToConnection = async (connectionId, message) => {
-  // Buscar conexión por ID y enviar mensaje
-  const clients = [...wss.clients];
-  const targetClient = clients.find(
-    (client) => client.connectionId === connectionId
-  );
+  try {
+    const ws = activeConnections.get(connectionId);
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      logger.warn(`Intento de enviar a conexión cerrada: ${connectionId}`);
 
-  if (targetClient && targetClient.readyState === WebSocket.OPEN) {
-    targetClient.send(
-      typeof message === 'string' ? message : JSON.stringify(message)
-    );
+      // Si la conexión no está disponible, eliminarla
+      activeConnections.delete(connectionId);
+      await deleteConnection(connectionId);
+      return false;
+    }
+
+    ws.send(JSON.stringify(message));
     return true;
+  } catch (error) {
+    logger.error(`Error enviando mensaje a ${connectionId}:`, error);
+    return false;
   }
-
-  return false;
 };
 
-// Middleware de manejo de errores
+// Middleware para manejar errores
 app.use(errorHandler);
 
-// Puerto
-const PORT = process.env.PORT || 3000;
+// Importar el servicio de WebSocket después de definir sendToConnection global
+// Esto evita problemas de dependencia circular
+const locationWebsocketService = require('./src/services/locationWebsocketService');
+const locationPollingService = require('./src/services/locationPollingService');
 
-// Iniciar servidor
+// Configurar puerto
+const PORT = process.env.PORT || 3000;
+const WS_PORT = process.env.WS_PORT || PORT;
+
+// Iniciar servidor HTTP
 server.listen(PORT, () => {
-  console.log(`Servidor escuchando en http://localhost:${PORT}`);
-  console.log(`WebSocket disponible en ws://localhost:${PORT}/ws`);
+  logger.info(`Servidor iniciado en puerto ${PORT}`);
+  logger.info(`WebSocket disponible en ws://localhost:${PORT}/ws`);
+
+  // Establecer endpoint para el servicio de WebSocket
+  locationWebsocketService.endpoint = `http://localhost:${PORT}`;
+
+  // Iniciar el servicio de polling de ubicaciones
+  locationPollingService.start();
 });
+
+// Manejar cierre del servidor
+process.on('SIGINT', () => {
+  logger.info('Cerrando servidor...');
+
+  // Detener el servicio de polling
+  locationPollingService.stop();
+
+  // Cerrar conexiones WebSocket
+  wss.clients.forEach((client) => {
+    client.terminate();
+  });
+
+  // Cerrar servidor HTTP
+  server.close(() => {
+    logger.info('Servidor cerrado');
+    process.exit(0);
+  });
+});
+
+// Exportar app para testing
+module.exports = app;
